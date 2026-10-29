@@ -1,0 +1,28 @@
+# Setiap kali teman-kuliah-source.zip diperbarui, GitHub membangun installer Windows
+# dan menerbitkannya sebagai rilis baru sesuai "version" di package.json.
+name: Rilis Teman Kuliah
+on:
+  push:
+    branches: [main]
+    paths: ["teman-kuliah-source.zip"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Buka source
+        run: Expand-Archive -Path teman-kuliah-source.zip -DestinationPath app
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Pasang dependensi
+        working-directory: app
+        run: npm ci
+      - name: Bangun dan terbitkan installer
+        working-directory: app
+        run: npx electron-builder --win nsis --x64 --publish always "-c.win.signAndEditExecutable=true"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
