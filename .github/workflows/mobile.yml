@@ -1,0 +1,118 @@
+# Teman Kuliah untuk HP. Setiap kali teman-kuliah-source.zip (desktop) atau teman-kuliah-mobile.zip berubah,
+# GitHub membangun APK Android dan IPA iPhone dari kode yang sama.
+# - Cabang main: hasilnya ditaruh di rilis vX.Y.Z (rilis yang sama dengan installer Windows).
+# - Cabang tes-hp: hanya build untuk dicoba (unduh di tab Actions > run > Artifacts), tidak ada rilis.
+name: Rilis Teman Kuliah HP
+on:
+  push:
+    branches: [main, tes-hp]
+    paths: ["teman-kuliah-source.zip", "teman-kuliah-mobile.zip"]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  NODE_VERSION: 22
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Buka source
+        run: |
+          unzip -q teman-kuliah-source.zip -d app
+          unzip -q teman-kuliah-mobile.zip -d mobile
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - name: Rakit tampilan HP
+        working-directory: mobile
+        run: |
+          npm ci
+          node build.mjs ../app
+          npx cap add android
+          node native-setup.mjs android
+          npx @capacitor/assets generate --android --iconBackgroundColor "#15171C" --iconBackgroundColorDark "#15171C" --splashBackgroundColor "#F3F4F6" --splashBackgroundColorDark "#000000"
+          npx cap sync android
+          echo "VERSI=$(node -p "require('./package.json').version")" >> $GITHUB_ENV
+      - name: Bangun APK
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+      - name: Tanda tangani APK
+        working-directory: mobile/android
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: |
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > tk.jks
+          else
+            echo "::warning::Secret ANDROID_KEYSTORE_B64 belum diisi. APK ditandatangani kunci sementara, jadi update berikutnya harus uninstall dulu."
+            KS_PASS=sementara123
+            keytool -genkeypair -keystore tk.jks -alias temankuliah -keyalg RSA -keysize 2048 -validity 10000 -storepass $KS_PASS -keypass $KS_PASS -dname "CN=Teman Kuliah"
+          fi
+          $BT/zipalign -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk aligned.apk
+          $BT/apksigner sign --ks tk.jks --ks-key-alias temankuliah --ks-pass pass:$KS_PASS --key-pass pass:$KS_PASS --out ../../TemanKuliah-$VERSI.apk aligned.apk
+          $BT/apksigner verify ../../TemanKuliah-$VERSI.apk
+          rm -f tk.jks
+      - uses: actions/upload-artifact@v4
+        with: { name: TemanKuliah-android, path: "TemanKuliah-*.apk" }
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Buka source
+        run: |
+          unzip -q teman-kuliah-source.zip -d app
+          unzip -q teman-kuliah-mobile.zip -d mobile
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      - name: Rakit tampilan HP
+        working-directory: mobile
+        run: |
+          npm ci
+          node build.mjs ../app
+          npx cap add ios --packagemanager CocoaPods
+          node native-setup.mjs ios
+          npx @capacitor/assets generate --ios --splashBackgroundColor "#F3F4F6" --splashBackgroundColorDark "#000000"
+          npx cap sync ios
+          echo "VERSI=$(node -p "require('./package.json').version")" >> $GITHUB_ENV
+      - name: Bangun IPA (belum ditandatangani)
+        working-directory: mobile/ios/App
+        run: |
+          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -sdk iphoneos -destination "generic/platform=iOS" \
+            -archivePath $RUNNER_TEMP/App.xcarchive archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | tail -40
+          mkdir -p $RUNNER_TEMP/ipa/Payload
+          cp -R $RUNNER_TEMP/App.xcarchive/Products/Applications/App.app $RUNNER_TEMP/ipa/Payload/
+          cd $RUNNER_TEMP/ipa && zip -qry $GITHUB_WORKSPACE/TemanKuliah-$VERSI.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with: { name: TemanKuliah-iphone, path: "TemanKuliah-*.ipa" }
+
+  rilis:
+    needs: [android, ios]
+    if: always() && github.ref == 'refs/heads/main' && (needs.android.result == 'success' || needs.ios.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: hasil, merge-multiple: true }
+      - name: Taruh di rilis
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          unzip -q -o teman-kuliah-source.zip package.json -d desk
+          VERSI=$(node -p "require('./desk/package.json').version")
+          TAG=v$VERSI
+          # Tunggu rilis Windows dibuat dulu (paling lama 30 menit) supaya semua file ada di satu rilis
+          for i in $(seq 1 60); do gh release view $TAG >/dev/null 2>&1 && break; echo "Menunggu rilis $TAG..."; sleep 30; done
+          gh release view $TAG >/dev/null 2>&1 || gh release create $TAG --title "$VERSI" --notes "Teman Kuliah $VERSI"
+          gh release upload $TAG hasil/* --clobber
+          ls -la hasil
