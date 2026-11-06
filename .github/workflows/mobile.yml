@@ -1,7 +1,7 @@
 # Teman Kuliah untuk HP. Setiap kali teman-kuliah-source.zip (desktop) atau teman-kuliah-mobile.zip berubah,
 # GitHub membangun APK Android dan IPA iPhone dari kode yang sama.
 # - Cabang main: hasilnya ditaruh di rilis vX.Y.Z (rilis yang sama dengan installer Windows).
-# - Cabang tes-hp: hanya build untuk dicoba (unduh di tab Actions > run > Artifacts), tidak ada rilis.
+# - Cabang tes-hp: hanya build untuk dicoba (APK, IPA, dan installer Windows; unduh di tab Actions > run > Artifacts), tidak ada rilis.
 name: Rilis Teman Kuliah HP
 on:
   push:
@@ -95,6 +95,25 @@ jobs:
           cd $RUNNER_TEMP/ipa && zip -qry $GITHUB_WORKSPACE/TemanKuliah-$VERSI.ipa Payload
       - uses: actions/upload-artifact@v4
         with: { name: TemanKuliah-iphone, path: "TemanKuliah-*.ipa" }
+
+  # Hanya untuk cabang tes: installer Windows ikut dibangun supaya PC bisa dites bersama HP (tanpa rilis).
+  # Di cabang main, installer Windows dibangun dan dirilis oleh workflow "Rilis Teman Kuliah" (rilis.yml).
+  windows:
+    if: github.ref != 'refs/heads/main'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Buka source
+        run: Expand-Archive -Path teman-kuliah-source.zip -DestinationPath app
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Bangun installer (tanpa rilis)
+        working-directory: app
+        run: |
+          npm ci
+          npx electron-builder --win nsis --x64 --publish never "-c.win.signAndEditExecutable=true"
+      - uses: actions/upload-artifact@v4
+        with: { name: TemanKuliah-windows, path: "app/dist/*.exe" }
 
   rilis:
     needs: [android, ios]
