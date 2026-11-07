@@ -65,7 +65,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: TemanKuliah-android, path: "TemanKuliah-*.apk" }
 
+  # iPhone ditunda (keputusan Nicky 6 Nov). Nyalakan lagi dengan membuat repository variable BUILD_IOS = true
+  # di Settings > Secrets and variables > Actions > Variables.
   ios:
+    if: vars.BUILD_IOS == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
